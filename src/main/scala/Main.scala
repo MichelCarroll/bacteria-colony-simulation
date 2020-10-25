@@ -9,7 +9,6 @@ import scala.scalajs.js.annotation.{JSExport, JSExportTopLevel}
 
 case class CellInputs(
                        nutrientsAvailable: Boolean,
-                       bacteriaInContact: Boolean,
                        nutrientLevelHalfway: Boolean,
                        nutrientLevelQuarterway: Boolean
                      )
@@ -130,7 +129,7 @@ class UniformNutrientSeeder(initialValue: Int) extends NutrientSeeder {
   }
 }
 
-class RandomBacteriaSeeder(p: Double, seed: Long, canvasEdgeSize: Int) {
+class RandomBacteriaSeeder(p: Double, seed: Long, canvasEdgeSize: Int, initialNutrients: Int) {
   private val rng = new Random(seed)
 
   def seed(): ArrayBuffer[Cell] = {
@@ -140,7 +139,7 @@ class RandomBacteriaSeeder(p: Double, seed: Long, canvasEdgeSize: Int) {
       y <- 0 until canvasEdgeSize
     } {
       if(rng.nextDouble() < p) {
-        bacteria.append(Cell(Position(x,y), nutrientLevel = 100, orientation = Up))
+        bacteria.append(Cell(Position(x,y), nutrientLevel = initialNutrients, orientation = Up))
       }
     }
     bacteria
@@ -175,12 +174,28 @@ object Main extends Movement  {
     val canvasEdgeSize = 200
     val fps = 10
     val seed = 100L
-    val updateQuantity = 5
+    val uptakeQuantity = 20
+    val moveCost = 2
+    val tumbleCost = 2
+    val uptakeNutrientsCost = 2
+    val splitCost = 4
+    val idleCost = 1
+    val bacteriaMaxNutrients = 100
+    val bacteriaInitialNutrients = 50
 
-    val nutrientsSeeder: NutrientSeeder = new UniformNutrientSeeder(initialValue = 50)
+    val nutrientsSeeder: NutrientSeeder = new UniformNutrientSeeder(initialValue = 100)
     val nutrients = new Nutrients(canvasEdgeSize, NutrientOptions(darkestAtNumberOfParticles = 100, seed = seed))
-    var bacteria = new RandomBacteriaSeeder(p = 0.005, seed = seed, canvasEdgeSize = canvasEdgeSize).seed()
+    var bacteria = new RandomBacteriaSeeder(
+      p = 0.005,
+      seed = seed,
+      canvasEdgeSize = canvasEdgeSize,
+      initialNutrients = bacteriaInitialNutrients
+    ).seed()
+
     val actionDecider: CellActionDecider = new RandomCellActionDecider(seed = seed)
+
+    val halfMaxNutrients = bacteriaMaxNutrients / 2
+    val quarterMaxNutrients = bacteriaMaxNutrients / 4
 
     ctx.canvas.width = canvasEdgeSize
     ctx.canvas.height = canvasEdgeSize
@@ -219,13 +234,21 @@ object Main extends Movement  {
         .filter(_.nutrientLevel > 0)
         .map { bact =>
 
-          actionDecider.decide(CellInputs(false, false, false, false)) match {
+          val tileLevel = nutrients(bact.position)
+
+          val inputs = CellInputs(
+            nutrientsAvailable = tileLevel > 0,
+            nutrientLevelHalfway = bact.nutrientLevel < halfMaxNutrients,
+            nutrientLevelQuarterway = bact.nutrientLevel < quarterMaxNutrients
+          )
+
+          actionDecider.decide(inputs) match {
             case MoveStraight =>
               val newPosition = move(bact.position, bact.orientation, canvasEdgeSize)
 
               bact.copy(
                 position = newPosition,
-                nutrientLevel = bact.nutrientLevel - 1
+                nutrientLevel = bact.nutrientLevel - moveCost
               )
 
             case Tumble =>
@@ -237,15 +260,17 @@ object Main extends Movement  {
               }
               bact.copy(
                 orientation = newOrientation,
-                nutrientLevel = bact.nutrientLevel - 1
+                nutrientLevel = bact.nutrientLevel - tumbleCost
               )
 
             case UptakeNutrient =>
-              val tileLevel = nutrients(bact.position)
+
               if(tileLevel > 0) {
-                val absorbedNutrients = Math.max(0, tileLevel)
-                nutrients.update(bact.position, tileLevel - absorbedNutrients)
-                bact.copy(nutrientLevel = absorbedNutrients - 1)
+                val effectiveUptakeQuantity = Math.min(uptakeQuantity, bacteriaMaxNutrients - bact.nutrientLevel)
+                val newTileLevel = Math.max(0, tileLevel - effectiveUptakeQuantity)
+                val absorbedNutrients = tileLevel - newTileLevel
+                nutrients.update(bact.position, newTileLevel)
+                bact.copy(nutrientLevel = absorbedNutrients - uptakeNutrientsCost)
               }
               else
                 bact
@@ -262,11 +287,11 @@ object Main extends Movement  {
                 )
               )
 
-              bact.copy(nutrientLevel = selfNutrients - 2)
+              bact.copy(nutrientLevel = selfNutrients - splitCost)
 
             case _ =>
               bact.copy(
-                nutrientLevel = bact.nutrientLevel - 1
+                nutrientLevel = bact.nutrientLevel - idleCost
               )
           }
         }
